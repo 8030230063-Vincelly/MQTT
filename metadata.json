@@ -1,0 +1,8 @@
+{
+  "name": "ESP32 MQTT Smart Controller",
+  "description": "Antarmuka web pintar untuk mengontrol dan memonitor perangkat ESP32 melalui MQTT, dilengkapi dengan pemantauan suhu/kelembaban real-time, pilihan broker cadangan, dan fitur perintah suara (Voice Command) cerdas berbasis AI Gemini.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
