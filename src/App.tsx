@@ -274,7 +274,7 @@ export default function App() {
       // MyQttHub
       // Standard WSS ports: 443 (HTTPS proxy WSS) or 8084 (Alternative WSS)
       wsPort = isCommonWsPort ? customPort : 443;
-      path = ""; // MyQttHub handles root wss
+      path = "/mqtt"; // MyQttHub expects '/mqtt' path for WebSockets
     } else if (server.includes("cedalo.cloud")) {
       // Cedalo Cloud
       // Standard WSS port is 443
@@ -614,7 +614,7 @@ export default function App() {
   };
 
   // Helper helper publish MQTT directly to connection
-  const publishDirect = (topic: string, payload: string) => {
+  const publishDirect = (topic: string, payload: string): boolean => {
     if (clientRef.current && state.brokerConnected) {
       console.log(`[Browser MQTT Publish] ${topic} => ${payload}`);
       clientRef.current.publish(topic, payload, { qos: 1 });
@@ -626,8 +626,10 @@ export default function App() {
       else if (topic.includes("variasi")) eventType = "variasi";
       
       addClientEvent(eventType, `Instruksi Direct Web: ${topic} => ${payload}`, "web");
+      return true;
     } else {
       console.warn("[Browser MQTT] Client not connected - cannot execute direct websocket publish.");
+      return false;
     }
   };
 
@@ -682,16 +684,18 @@ export default function App() {
     setState(prev => ({ ...prev, relays: nextRelays }));
 
     // Publish directly over WebSockets from browser for 100% responsiveness on Vercel
-    publishDirect(topic, nextPayload);
+    const directSent = publishDirect(topic, nextPayload);
 
-    try {
-      await fetch("/api/control", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic, payload: nextPayload })
-      });
-    } catch (err) {
-      console.warn("Failed REST toggle relay backup (expected in Vercel serverless):", err);
+    if (!directSent) {
+      try {
+        await fetch("/api/control", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ topic, payload: nextPayload })
+        });
+      } catch (err) {
+        console.warn("Failed REST toggle relay backup (expected in Vercel serverless):", err);
+      }
     }
   };
 
@@ -703,16 +707,18 @@ export default function App() {
     setState(prev => ({ ...prev, variasiMode: mode }));
 
     // Publish directly over WebSockets
-    publishDirect(topic, payload);
+    const directSent = publishDirect(topic, payload);
 
-    try {
-      await fetch("/api/control", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic, payload })
-      });
-    } catch (err) {
-      console.warn("Failed REST variasi mode backup (expected in Vercel):", err);
+    if (!directSent) {
+      try {
+        await fetch("/api/control", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ topic, payload })
+        });
+      } catch (err) {
+        console.warn("Failed REST variasi mode backup (expected in Vercel):", err);
+      }
     }
   };
 
@@ -723,16 +729,18 @@ export default function App() {
     setState(prev => ({ ...prev, variasiJeda: jedaValue }));
 
     // Publish directly over WebSockets
-    publishDirect(topic, jedaValue.toString());
+    const directSent = publishDirect(topic, jedaValue.toString());
 
-    try {
-      await fetch("/api/control", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic, payload: jedaValue.toString() })
-      });
-    } catch (err) {
-      console.warn("Failed REST variasi jeda backup (expected in Vercel):", err);
+    if (!directSent) {
+      try {
+        await fetch("/api/control", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ topic, payload: jedaValue.toString() })
+        });
+      } catch (err) {
+        console.warn("Failed REST variasi jeda backup (expected in Vercel):", err);
+      }
     }
   };
 
