@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import mqtt from "mqtt";
 import { 
   Power, 
   Thermometer, 
@@ -71,6 +72,7 @@ export default function App() {
   // References
   const recognitionRef = useRef<any>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const clientRef = useRef<any>(null);
 
   // Constants mapping
   const RELAY_LOADOUT_NAMES = [
@@ -181,23 +183,400 @@ export default function App() {
     }
   }, [events]);
 
+  const addClientEvent = (
+    type: "system" | "sensor" | "broker" | "relay" | "variasi" | "voice",
+    detail: string,
+    origin: "system" | "esp32" | "web"
+  ) => {
+    const newEvt: ActivityEvent = {
+      id: `evt_cli_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+      time: new Date().toISOString(),
+      type,
+      detail,
+      origin
+    };
+    setEvents(prev => {
+      const updated = [newEvt, ...prev];
+      return updated.slice(0, 30);
+    });
+  };
+
+  const getBrokerWsUrlAndOptions = (broker: any) => {
+    let protocol = "wss";
+    let wsPort = 443;
+    let path = "";
+    
+    const server = broker.server || "";
+    const user = broker.user || "";
+    const pass = broker.pass || "";
+    const vhost = broker.vhost || "";
+    
+    // Determine WebSocket options depending on known hostnames for browser support
+    if (server.includes("cloudamqp.com")) {
+      wsPort = 15676;
+      path = "/ws";
+    } else if (server.includes("myqtthub.com")) {
+      wsPort = 443;
+      path = "";
+    } else if (server.includes("cedalo.cloud")) {
+      wsPort = 443;
+      path = "/mqtt";
+    } else {
+      // General defaults
+      const isHttps = window.location.protocol === "https:";
+      protocol = isHttps ? "wss" : "ws";
+      wsPort = isHttps ? 443 : 1883;
+      
+      // Keep selected port if it sounds like a WebSocket port
+      if (broker.port === 8000 || broker.port === 8083 || broker.port === 8084 || broker.port === 15676 || broker.port === 31443) {
+        wsPort = broker.port;
+      }
+    }
+    
+    const loginUser = vhost ? `${vhost}:${user}` : user;
+    
+    // Generate unique client name to prevent collision
+    const useExact = broker.clientId === "hebat-web-client" || broker.clientId === "WebClient";
+    const clientId = useExact ? broker.clientId : `${broker.clientId}_browser_${Math.random().toString(36).substring(2, 6)}`;
+    
+    let wsUrl = `${protocol}://${server}:${wsPort}`;
+    if (path) {
+      wsUrl += path;
+    }
+    
+    return {
+      url: wsUrl,
+      options: {
+        username: loginUser,
+        password: pass,
+        clientId: clientId,
+        rejectUnauthorized: false,
+        connectTimeout: 8000,
+        reconnectPeriod: 4000,
+      }
+    };
+  };
+
   const fetchBaselineState = async () => {
     try {
       const res = await fetch("/api/state");
       if (res.ok) {
         const data = await res.json();
-        setState(data.state);
-        setEvents(data.events);
-        if (data.brokers) {
-          setBrokers(data.brokers);
+        
+        // Cache and merge brokers list
+        let loadedBrokers = data.brokers || [];
+        const cached = localStorage.getItem("mqtt_brokers");
+        if (cached) {
+          try {
+            const parsed = JSON.parse(cached);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              loadedBrokers = parsed;
+            }
+          } catch (e) {
+            console.error("Failed parsing cached brokers:", e);
+          }
+        } else {
+          localStorage.setItem("mqtt_brokers", JSON.stringify(loadedBrokers));
         }
+        
+        setBrokers(loadedBrokers);
+        
+        setState(prev => ({
+          ...prev,
+          relays: data.state.relays,
+          variasiMode: data.state.variasiMode,
+          variasiJeda: data.state.variasiJeda,
+          activeBrokerIdx: data.state.activeBrokerIdx,
+          temperature: data.state.temperature,
+          humidity: data.state.humidity,
+          lastUpdated: data.state.lastUpdated
+        }));
+        
+        setEvents(data.events || []);
         setConnectionStatus("CONNECTED");
       }
     } catch (e) {
       console.error("Error fetching state:", e);
       setConnectionStatus("DISCONNECTED");
+      
+      // Local backup fallback
+      const cached = localStorage.getItem("mqtt_brokers");
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setBrokers(parsed);
+          }
+        } catch (err) {}
+      } else {
+        setBrokers([
+          { server: "kingfisher.lmq.cloudamqp.com",         port: 8883, user: "wxoeelnh", pass: "BQAdo1W8qPeDlnF1O2WZ_AdUTd_uVG0x", clientId: "ESP32AMQP", vhost: "wxoeelnh" },
+          { server: "node02.myqtthub.com",                  port: 1883, user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null },
+          { server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", port: 8883, user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null }
+        ]);
+      }
     }
   };
+
+  // -------------------------------------------------------------
+  //  BROWSER DIRECT MQTT OVER WEBSOCKETS CLIENT ENGINE
+  // -------------------------------------------------------------
+  useEffect(() => {
+    if (brokers.length === 0) return;
+    
+    const activeBroker = brokers[state.activeBrokerIdx];
+    if (!activeBroker) return;
+    
+    // Close any prior MQTT connections
+    if (clientRef.current) {
+      try {
+        console.log("[Browser MQTT] Closing previous connection...");
+        clientRef.current.end();
+      } catch (e) {
+        console.error("[Browser MQTT] Error closing connection:", e);
+      }
+    }
+    
+    const connInfo = getBrokerWsUrlAndOptions(activeBroker);
+    console.log(`[Browser MQTT] Connecting directly via WebSockets to: ${connInfo.url}`);
+    
+    addClientEvent("system", `Koneksi browser ke Broker ${state.activeBrokerIdx + 1} (${activeBroker.server}) dimulai...`, "system");
+    
+    setState(prev => ({ ...prev, brokerConnected: false }));
+    
+    try {
+      const client = mqtt.connect(connInfo.url, connInfo.options);
+      clientRef.current = client;
+      
+      client.on("connect", () => {
+        console.log("[Browser MQTT] Connected to Brokered WebSocket!");
+        setState(prev => ({ ...prev, brokerConnected: true }));
+        addClientEvent("broker", `Browser sukses terhubung langsung ke Broker ${state.activeBrokerIdx + 1} (${activeBroker.server}) via WebSockets!`, "system");
+        
+        // Subscribe to exactly the same ESP32 topics
+        const topics = [
+          "kontrol/relay1",
+          "kontrol/relay2",
+          "kontrol/relay3",
+          "kontrol/relay4",
+          "kontrol/variasi",
+          "kontrol/variasi/jeda",
+          "kontrol/broker",
+          "status/broker",
+          "sensor/suhu",
+          "sensor/kelembaban"
+        ];
+        
+        client.subscribe(topics, (err) => {
+          if (err) {
+            console.error("[Browser MQTT] Subscribe fail:", err);
+            addClientEvent("system", `Gagal melakukan subscribe topik: ${err.message}`, "system");
+          } else {
+            console.log("[Browser MQTT] Client-side subscription success!");
+          }
+        });
+      });
+      
+      client.on("message", (topic, message) => {
+        const value = message.toString().trim();
+        console.log(`[Browser MQTT Msg] ${topic} => ${value}`);
+        handleIncomingClientMqttMessage(topic, value);
+      });
+      
+      client.on("error", (err) => {
+        console.error("[Browser MQTT Error]:", err.message);
+        setState(prev => ({ ...prev, brokerConnected: false }));
+        addClientEvent("system", `Konfig Broker ${state.activeBrokerIdx + 1} error: ${err.message}`, "system");
+      });
+      
+      client.on("close", () => {
+        setState(prev => {
+          if (prev.brokerConnected) {
+            addClientEvent("broker", `Koneksi langsung browser ke Broker ${prev.activeBrokerIdx + 1} terputus.`, "system");
+          }
+          return { ...prev, brokerConnected: false };
+        });
+      });
+      
+    } catch (err: any) {
+      console.error("[Browser MQTT Connect Exception]:", err);
+      addClientEvent("system", `Inisialisasi WebSocket browser gagal: ${err.message}`, "system");
+    }
+    
+    return () => {
+      if (clientRef.current) {
+        try {
+          clientRef.current.end();
+          clientRef.current = null;
+        } catch (e) {}
+      }
+    };
+  }, [state.activeBrokerIdx, brokers]);
+
+  // Handle incoming topics received inside browser directly
+  const handleIncomingClientMqttMessage = (topic: string, value: string) => {
+    if (topic === "sensor/suhu") {
+      const t = parseFloat(value);
+      if (!isNaN(t)) {
+        setState(prev => ({ ...prev, temperature: parseFloat(t.toFixed(1)) }));
+        addClientEvent("sensor", `Suhu termonitor: ${parseFloat(t.toFixed(1))}°C`, "esp32");
+      }
+    } else if (topic === "sensor/kelembaban") {
+      const h = parseFloat(value);
+      if (!isNaN(h)) {
+        setState(prev => ({ ...prev, humidity: parseFloat(h.toFixed(1)) }));
+        addClientEvent("sensor", `Kelembaban termonitor: ${parseFloat(h.toFixed(1))}%`, "esp32");
+      }
+    } else if (topic === "status/broker") {
+      addClientEvent("broker", `ESP32 status: ${value}`, "esp32");
+      const parts = value.split("|");
+      if (parts[0] && parts[0].startsWith("BROKER:")) {
+        const idx = parseInt(parts[0].substring(7)) - 1;
+        if (idx >= 0 && idx <= 2 && idx !== state.activeBrokerIdx) {
+          console.log(`[Browser Sync] ESP32 has selected Broker #${idx + 1}. Syncing...`);
+          addClientEvent("broker", `Browser menyelaraskan broker dengan ESP32 ke Broker ${idx + 1}`, "system");
+          setState(prev => ({ ...prev, activeBrokerIdx: idx }));
+        }
+      }
+    } else if (topic === "kontrol/relay1") {
+      const nextVal = (value === "ON");
+      setState(prev => {
+        const nextRelays = [...prev.relays] as [boolean, boolean, boolean, boolean];
+        if (nextRelays[0] !== nextVal) {
+          nextRelays[0] = nextVal;
+          addClientEvent("relay", `Relay 1 diatur: ${value}`, "esp32");
+          return { ...prev, relays: nextRelays };
+        }
+        return prev;
+      });
+    } else if (topic === "kontrol/relay2") {
+      const nextVal = (value === "ON");
+      setState(prev => {
+        const nextRelays = [...prev.relays] as [boolean, boolean, boolean, boolean];
+        if (nextRelays[1] !== nextVal) {
+          nextRelays[1] = nextVal;
+          addClientEvent("relay", `Relay 2 diatur: ${value}`, "esp32");
+          return { ...prev, relays: nextRelays };
+        }
+        return prev;
+      });
+    } else if (topic === "kontrol/relay3") {
+      const nextVal = (value === "ON");
+      setState(prev => {
+        const nextRelays = [...prev.relays] as [boolean, boolean, boolean, boolean];
+        if (nextRelays[2] !== nextVal) {
+          nextRelays[2] = nextVal;
+          addClientEvent("relay", `Relay 3 diatur: ${value}`, "esp32");
+          return { ...prev, relays: nextRelays };
+        }
+        return prev;
+      });
+    } else if (topic === "kontrol/relay4") {
+      const nextVal = (value === "ON");
+      setState(prev => {
+        const nextRelays = [...prev.relays] as [boolean, boolean, boolean, boolean];
+        if (nextRelays[3] !== nextVal) {
+          nextRelays[3] = nextVal;
+          addClientEvent("relay", `Relay 4 diatur: ${value}`, "esp32");
+          return { ...prev, relays: nextRelays };
+        }
+        return prev;
+      });
+    } else if (topic === "kontrol/variasi") {
+      if (value === "STOP") {
+        setState(prev => {
+          if (prev.variasiMode !== 0) {
+            addClientEvent("variasi", `Animasi variasi dihentikan`, "esp32");
+            return { ...prev, variasiMode: 0 };
+          }
+          return prev;
+        });
+      } else {
+        const mode = parseInt(value);
+        if (mode === 1 || mode === 2) {
+          setState(prev => {
+            if (prev.variasiMode !== mode) {
+              addClientEvent("variasi", `Variasi mode ${mode} diaktifkan`, "esp32");
+              return { ...prev, variasiMode: mode };
+            }
+            return prev;
+          });
+        }
+      }
+    } else if (topic === "kontrol/variasi/jeda") {
+      const jeda = parseInt(value);
+      if (!isNaN(jeda) && jeda >= 50 && jeda <= 500) {
+        setState(prev => {
+          if (prev.variasiJeda !== jeda) {
+            addClientEvent("variasi", `Jeda bervariasi diperbaharui ke ${jeda} ms`, "esp32");
+            return { ...prev, variasiJeda: jeda };
+          }
+          return prev;
+        });
+      }
+    } else if (topic === "kontrol/broker") {
+      const idx = parseInt(value) - 1;
+      if (idx >= 0 && idx <= 2 && idx !== state.activeBrokerIdx) {
+        addClientEvent("broker", `Permintaan ganti broker terdeteksi ke Broker ${idx + 1}`, "esp32");
+        setState(prev => ({ ...prev, activeBrokerIdx: idx }));
+      }
+    }
+  };
+
+  // Helper helper publish MQTT directly to connection
+  const publishDirect = (topic: string, payload: string) => {
+    if (clientRef.current && state.brokerConnected) {
+      console.log(`[Browser MQTT Publish] ${topic} => ${payload}`);
+      clientRef.current.publish(topic, payload, { qos: 1 });
+      
+      let eventType: "system" | "sensor" | "broker" | "relay" | "variasi" | "voice" = "system";
+      if (topic.includes("relay")) eventType = "relay";
+      else if (topic.includes("sensor")) eventType = "sensor";
+      else if (topic.includes("broker")) eventType = "broker";
+      else if (topic.includes("variasi")) eventType = "variasi";
+      
+      addClientEvent(eventType, `Instruksi Direct Web: ${topic} => ${payload}`, "web");
+    } else {
+      console.warn("[Browser MQTT] Client not connected - cannot execute direct websocket publish.");
+    }
+  };
+
+  // -------------------------------------------------------------
+  //  BROWSER DIRECT SIMULATOR TELEMETRI DRIFT ENGINE
+  // -------------------------------------------------------------
+  useEffect(() => {
+    if (!isSimulatorActive) return;
+    
+    console.log("[Browser Sim] Starting client-side telemetry generator...");
+    const simInterval = setInterval(() => {
+      // Drift values slightly
+      const tempDelta = (Math.random() - 0.5) * 0.4;
+      const nextTemp = parseFloat(Math.min(35, Math.max(16, state.temperature + tempDelta)).toFixed(1));
+      
+      const humDelta = (Math.random() - 0.5) * 1.0;
+      const nextHum = parseFloat(Math.min(95, Math.max(40, state.humidity + humDelta)).toFixed(1));
+      
+      setState(prev => ({
+        ...prev,
+        temperature: nextTemp,
+        humidity: nextHum,
+        lastUpdated: new Date().toISOString()
+      }));
+      
+      // Publish directly over active broker so all listening hardware receives updates!
+      if (clientRef.current && state.brokerConnected) {
+        clientRef.current.publish("sensor/suhu", nextTemp.toString(), { qos: 1 });
+        clientRef.current.publish("sensor/kelembaban", nextHum.toString(), { qos: 1 });
+      }
+      
+      addClientEvent("sensor", `Simulator: Suhu = ${nextTemp}°C, Kelembaban = ${nextHum}%`, "system");
+    }, 5000);
+    
+    return () => {
+      console.log("[Browser Sim] Stopping client-side telemetry generator...");
+      clearInterval(simInterval);
+    };
+  }, [isSimulatorActive, state.temperature, state.humidity, state.brokerConnected]);
 
   // -------------------------------------------------------------
   //  CONTROL & API DISPATCHERS
@@ -212,6 +591,9 @@ export default function App() {
     nextRelays[idx] = !state.relays[idx];
     setState(prev => ({ ...prev, relays: nextRelays }));
 
+    // Publish directly over WebSockets from browser for 100% responsiveness on Vercel
+    publishDirect(topic, nextPayload);
+
     try {
       await fetch("/api/control", {
         method: "POST",
@@ -219,7 +601,7 @@ export default function App() {
         body: JSON.stringify({ topic, payload: nextPayload })
       });
     } catch (err) {
-      console.error("Failed to toggle relay:", err);
+      console.warn("Failed REST toggle relay backup (expected in Vercel serverless):", err);
     }
   };
 
@@ -230,6 +612,9 @@ export default function App() {
     // Snappy optimistic update
     setState(prev => ({ ...prev, variasiMode: mode }));
 
+    // Publish directly over WebSockets
+    publishDirect(topic, payload);
+
     try {
       await fetch("/api/control", {
         method: "POST",
@@ -237,7 +622,7 @@ export default function App() {
         body: JSON.stringify({ topic, payload })
       });
     } catch (err) {
-      console.error("Failed dispatching variasi mode:", err);
+      console.warn("Failed REST variasi mode backup (expected in Vercel):", err);
     }
   };
 
@@ -247,6 +632,9 @@ export default function App() {
     // optimistic update
     setState(prev => ({ ...prev, variasiJeda: jedaValue }));
 
+    // Publish directly over WebSockets
+    publishDirect(topic, jedaValue.toString());
+
     try {
       await fetch("/api/control", {
         method: "POST",
@@ -254,7 +642,7 @@ export default function App() {
         body: JSON.stringify({ topic, payload: jedaValue.toString() })
       });
     } catch (err) {
-      console.error("Failed updating jeda:", err);
+      console.warn("Failed REST variasi jeda backup (expected in Vercel):", err);
     }
   };
 
@@ -262,6 +650,13 @@ export default function App() {
     if (index === state.activeBrokerIdx) return;
     
     setState(prev => ({ ...prev, activeBrokerIdx: index, brokerConnected: false }));
+    addClientEvent("broker", `Ganti broker dipilih ke: Broker ${index + 1}`, "web");
+
+    // Publish switch broker command over existing broker first if connected
+    if (clientRef.current && state.brokerConnected) {
+      clientRef.current.publish("kontrol/broker", `${index + 1}`, { qos: 1 });
+    }
+
     try {
       await fetch("/api/switch-broker", {
         method: "POST",
@@ -269,7 +664,7 @@ export default function App() {
         body: JSON.stringify({ index })
       });
     } catch (err) {
-      console.error("Failed switching broker:", err);
+      console.warn("Failed REST switch-broker backup (expected in Vercel):", err);
     }
   };
 
@@ -294,8 +689,29 @@ export default function App() {
   const handleSaveBroker = async (e: React.FormEvent) => {
     e.preventDefault();
     if (editingBrokerIdx === null) return;
+
+    const updatedBroker = {
+      id: editingBrokerIdx + 1,
+      server: editServer,
+      port: parseInt(editPort) || 1883,
+      user: editUser,
+      pass: editPass,
+      clientId: editClientId,
+      vhost: editVhost || null
+    };
+
+    const nextBrokers = [...brokers];
+    nextBrokers[editingBrokerIdx] = updatedBroker;
+
+    // Cache updated broker list persistent in the browser localStorage
+    setBrokers(nextBrokers);
+    localStorage.setItem("mqtt_brokers", JSON.stringify(nextBrokers));
+    addClientEvent("broker", `Kredensial Broker ${editingBrokerIdx + 1} diperbaharui di browser: ${editServer}:${editPort}`, "web");
+    setEditingBrokerIdx(null);
+
+    // Save on backend as a non-blocking reference
     try {
-      const res = await fetch("/api/update-broker", {
+      await fetch("/api/update-broker", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -308,21 +724,16 @@ export default function App() {
           vhost: editVhost || null
         })
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.brokers) {
-          setBrokers(data.brokers);
-        }
-        setEditingBrokerIdx(null);
-      }
     } catch (err) {
-      console.error("Failed to update broker:", err);
+      console.warn("Failed REST update-broker backup (expected in Vercel):", err);
     }
   };
 
   const toggleSimulator = async () => {
     const nextSim = !isSimulatorActive;
     setIsSimulatorActive(nextSim);
+    addClientEvent("system", `Mode simulator telemetri ESP32 ${nextSim ? "diaktifkan" : "dinonaktifkan"}.`, "system");
+
     try {
       await fetch("/api/simulator", {
         method: "POST",
@@ -330,7 +741,7 @@ export default function App() {
         body: JSON.stringify({ enabled: nextSim })
       });
     } catch (err) {
-      console.error("Failed to toggle simulator:", err);
+      console.warn("Failed REST toggle simulator backup (expected in Vercel):", err);
     }
   };
 
@@ -371,7 +782,26 @@ export default function App() {
         setAiResponse(payload.message);
         setLastExecutedVoiceRules(payload.commands || []);
 
-        // Speach text out in Indonesian
+        // Execute commands returned by AI voice!
+        if (payload.commands && Array.isArray(payload.commands)) {
+          payload.commands.forEach((cmd: any) => {
+            if (cmd.topic && cmd.payload !== undefined) {
+              const payloadStr = String(cmd.payload);
+              if (cmd.topic === "kontrol/broker") {
+                const bIdx = parseInt(payloadStr) - 1;
+                if (bIdx >= 0 && bIdx <= 2) {
+                  setState(prev => ({ ...prev, activeBrokerIdx: bIdx, brokerConnected: false }));
+                  addClientEvent("broker", `Voice AI mengalihkan Broker ke #${bIdx + 1}`, "system");
+                }
+              } else {
+                publishDirect(cmd.topic, payloadStr);
+                handleIncomingClientMqttMessage(cmd.topic, payloadStr);
+              }
+            }
+          });
+        }
+
+        // Speech text out in Indonesian
         if ("speechSynthesis" in window) {
           const speakText = payload.message;
           const utterance = new SpeechSynthesisUtterance(speakText);
