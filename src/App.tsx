@@ -151,7 +151,21 @@ export default function App() {
           setState(payload.state);
           setEvents(payload.events);
           if (payload.brokers) {
-            setBrokers(payload.brokers);
+            let loadedBrokers = payload.brokers;
+            const cached = localStorage.getItem("mqtt_brokers");
+            if (cached) {
+              try {
+                const parsed = JSON.parse(cached);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                  loadedBrokers = parsed;
+                }
+              } catch (e) {
+                console.error("Failed parsing cached brokers in SSE:", e);
+              }
+            } else {
+              localStorage.setItem("mqtt_brokers", JSON.stringify(loadedBrokers));
+            }
+            setBrokers(loadedBrokers);
           }
           setConnectionStatus("CONNECTED");
         }
