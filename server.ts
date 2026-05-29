@@ -100,6 +100,65 @@ function broadcastStateToClients() {
 // Active MQTT connection reference
 let mqttClient: mqtt.MqttClient | null = null;
 
+// Support transactional publish for serverless (Vercel) environment
+async function publishMqttServerless(brokerIdx: number, topic: string, payload: string): Promise<boolean> {
+  const broker = BROKERS[brokerIdx];
+  const loginUser = broker.vhost ? `${broker.vhost}:${broker.user}` : broker.user;
+  const useExact = (broker as any).exactClientId || broker.clientId === "hebat-web-client" || broker.clientId === "WebClient";
+  const uniqueClientId = useExact ? broker.clientId : `${broker.clientId}_vercel_${Math.random().toString(36).substring(2, 6)}`;
+  const protocol = broker.port === 1883 || broker.port === 1884 ? "mqtt" : "mqtts";
+
+  return new Promise((resolve) => {
+    console.log(`[Vercel MQTT] Connecting to publish on ${broker.server}:${broker.port} as ${uniqueClientId} over ${protocol}...`);
+    const client = mqtt.connect(`${protocol}://${broker.server}:${broker.port}`, {
+      username: loginUser,
+      password: broker.pass,
+      clientId: uniqueClientId,
+      rejectUnauthorized: false,
+      connectTimeout: 5000,
+    });
+
+    let resolved = false;
+
+    const cleanup = () => {
+      if (!resolved) {
+        resolved = true;
+        try {
+          client.end();
+        } catch (e) {}
+      }
+    };
+
+    client.on("connect", () => {
+      console.log(`[Vercel MQTT] Connected! Publishing topic "${topic}" => "${payload}"`);
+      client.publish(topic, payload, { qos: 1 }, (err) => {
+        if (err) {
+          console.error("[Vercel MQTT] Publish failed:", err);
+        } else {
+          console.log("[Vercel MQTT] Publish succeeded!");
+        }
+        cleanup();
+        resolve(!err);
+      });
+    });
+
+    client.on("error", (err) => {
+      console.error("[Vercel MQTT] Connection error:", err.message);
+      cleanup();
+      resolve(false);
+    });
+
+    // Enforce 4-second cutoff
+    setTimeout(() => {
+      if (!resolved) {
+        console.warn("[Vercel MQTT] Publish transaction timed out.");
+        cleanup();
+        resolve(false);
+      }
+    }, 4000);
+  });
+}
+
 function connectMQTT(brokerIdx: number) {
   if (mqttClient) {
     try {
@@ -384,7 +443,7 @@ app.post("/api/update-broker", (req, res) => {
 });
 
 // 3. Publish Control MQTT Topic
-app.post("/api/control", (req, res) => {
+app.post("/api/control", async (req, res) => {
   const { topic, payload } = req.body;
   if (!topic || payload === undefined || payload === null) {
     res.status(400).json({ error: "Parameter topic dan payload wajib diisi." });
@@ -397,7 +456,10 @@ app.post("/api/control", (req, res) => {
   // Push event local
   addEvent(topic.split("/")[1] || "system", `Instruksi Web: ${topic} => ${payloadStr}`, "web");
 
-  if (mqttClient && systemState.brokerConnected) {
+  if (process.env.VERCEL) {
+    const success = await publishMqttServerless(systemState.activeBrokerIdx, topic, payloadStr);
+    console.log(`[Vercel REST Publish] Transactional publish output success=${success}`);
+  } else if (mqttClient && systemState.brokerConnected) {
     mqttClient.publish(topic, payloadStr, { qos: 1 });
   } else {
     // If and only if broker is disconnected, we automatically self-apply this
@@ -414,7 +476,7 @@ app.post("/api/control", (req, res) => {
 });
 
 // 4. Manual Broker Change Trigger
-app.post("/api/switch-broker", (req, res) => {
+app.post("/api/switch-broker", async (req, res) => {
   const { index } = req.body;
   const idx = parseInt(index);
   if (isNaN(idx) || idx < 0 || idx > 2) {
@@ -424,16 +486,21 @@ app.post("/api/switch-broker", (req, res) => {
 
   addEvent("broker", `Permintaan ganti broker ke: Broker ${idx + 1}`, "web");
 
-  // Publish to the current MQTT broker so ESP32 knows to switch broker
-  if (mqttClient && systemState.brokerConnected) {
-    console.log(`[MQTT Switch] Sending ganti broker perintah to topic kontrol/broker: ${idx + 1}`);
-    mqttClient.publish("kontrol/broker", `${idx + 1}`, { qos: 1 });
-  }
+  if (process.env.VERCEL) {
+    await publishMqttServerless(systemState.activeBrokerIdx, "kontrol/broker", `${idx + 1}`);
+    systemState.activeBrokerIdx = idx;
+  } else {
+    // Publish to the current MQTT broker so ESP32 knows to switch broker
+    if (mqttClient && systemState.brokerConnected) {
+      console.log(`[MQTT Switch] Sending ganti broker perintah to topic kontrol/broker: ${idx + 1}`);
+      mqttClient.publish("kontrol/broker", `${idx + 1}`, { qos: 1 });
+    }
 
-  // Perform broker switch locally on the server
-  setTimeout(() => {
-    connectMQTT(idx);
-  }, 300);
+    // Perform broker switch locally on the server
+    setTimeout(() => {
+      connectMQTT(idx);
+    }, 300);
+  }
 
   res.json({ status: "switching", target_broker_index: idx });
 });
@@ -515,7 +582,7 @@ Generate a JSON object conforming exactly to the following properties:
     console.log(`[AI Voice Parsed] Response:`, data);
 
     if (data.commands && Array.isArray(data.commands)) {
-      data.commands.forEach((cmd: any) => {
+      for (const cmd of data.commands) {
         if (cmd.topic && cmd.payload !== undefined) {
           addEvent("voice", `Aksi Otomatis Voice: ${cmd.topic} => ${cmd.payload}`, "system");
           
@@ -523,20 +590,27 @@ Generate a JSON object conforming exactly to the following properties:
             // Broker index change
             const bIdx = parseInt(cmd.payload) - 1;
             if (bIdx >= 0 && bIdx <= 2) {
-              if (mqttClient && systemState.brokerConnected) {
-                mqttClient.publish("kontrol/broker", `${bIdx + 1}`, { qos: 1 });
+              if (process.env.VERCEL) {
+                await publishMqttServerless(systemState.activeBrokerIdx, "kontrol/broker", `${bIdx + 1}`);
+                systemState.activeBrokerIdx = bIdx;
+              } else {
+                if (mqttClient && systemState.brokerConnected) {
+                  mqttClient.publish("kontrol/broker", `${bIdx + 1}`, { qos: 1 });
+                }
+                setTimeout(() => connectMQTT(bIdx), 300);
               }
-              setTimeout(() => connectMQTT(bIdx), 300);
             }
           } else {
             // Normal system topic publish
-            if (mqttClient && systemState.brokerConnected) {
+            if (process.env.VERCEL) {
+              await publishMqttServerless(systemState.activeBrokerIdx, cmd.topic, String(cmd.payload));
+            } else if (mqttClient && systemState.brokerConnected) {
               mqttClient.publish(cmd.topic, String(cmd.payload), { qos: 1 });
             }
             handleIncomingMqttMessage(cmd.topic, String(cmd.payload));
           }
         }
-      });
+      }
       systemState.lastUpdated = new Date().toISOString();
       broadcastStateToClients();
     }
@@ -594,9 +668,6 @@ app.post("/api/simulator", (req, res) => {
   res.json({ status: "ok", simulator_active: !!simulatorInterval });
 });
 
-// Start MQTT initial connection to default broker
-connectMQTT(0);
-
 // Set up frontend asset delivery
 async function startViteProxy() {
   if (process.env.NODE_ENV !== "production") {
@@ -620,4 +691,11 @@ async function startViteProxy() {
   });
 }
 
-startViteProxy();
+// Only start direct MQTT listener loops and Express web server if NOT running on Vercel
+if (!process.env.VERCEL) {
+  // Start MQTT initial connection to default broker
+  connectMQTT(0);
+  startViteProxy();
+}
+
+export default app;
