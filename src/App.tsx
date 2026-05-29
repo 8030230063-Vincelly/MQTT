@@ -46,7 +46,25 @@ export default function App() {
   });
 
   const [events, setEvents] = useState<ActivityEvent[]>([]);
-  const [brokers, setBrokers] = useState<any[]>([]);
+  const [brokers, setBrokers] = useState<any[]>(() => {
+    const defaultBrokers = [
+      { id: 1, name: "CloudAMQP (Primary)",         server: "kingfisher.lmq.cloudamqp.com",         port: 8883, user: "wxoeelnh", pass: "BQAdo1W8qPeDlnF1O2WZ_AdUTd_uVG0x", clientId: "ESP32AMQP", vhost: "wxoeelnh" },
+      { id: 2, name: "MyQtthub (Backup)",           port: 1883, server: "node02.myqtthub.com",                  user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null },
+      { id: 3, name: "Cedalo Cloud (Fallback)",     port: 8883, server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null }
+    ];
+    const cached = localStorage.getItem("mqtt_brokers");
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      } catch (e) {
+        console.error("Failed parsing initial cached brokers:", e);
+      }
+    }
+    return defaultBrokers;
+  });
   const [isSimulatorActive, setIsSimulatorActive] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<"CONNECTED" | "CONNECTING" | "DISCONNECTED">("CONNECTING");
 
@@ -157,7 +175,21 @@ export default function App() {
               try {
                 const parsed = JSON.parse(cached);
                 if (Array.isArray(parsed) && parsed.length > 0) {
-                  loadedBrokers = parsed;
+                  const defaultBrokers = [
+                    { id: 1, name: "CloudAMQP (Primary)",         server: "kingfisher.lmq.cloudamqp.com",         port: 8883, user: "wxoeelnh", pass: "BQAdo1W8qPeDlnF1O2WZ_AdUTd_uVG0x", clientId: "ESP32AMQP", vhost: "wxoeelnh" },
+                    { id: 2, name: "MyQtthub (Backup)",           port: 1883, server: "node02.myqtthub.com",                  user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null },
+                    { id: 3, name: "Cedalo Cloud (Fallback)",     port: 8883, server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null }
+                  ];
+                  const clean = [];
+                  for (let i = 0; i < 3; i++) {
+                    const item = parsed[i];
+                    if (item && typeof item === 'object' && item.server) {
+                      clean.push({ ...defaultBrokers[i], ...item });
+                    } else {
+                      clean.push(defaultBrokers[i]);
+                    }
+                  }
+                  loadedBrokers = clean;
                 }
               } catch (e) {
                 console.error("Failed parsing cached brokers in SSE:", e);
@@ -300,7 +332,21 @@ export default function App() {
           try {
             const parsed = JSON.parse(cached);
             if (Array.isArray(parsed) && parsed.length > 0) {
-              loadedBrokers = parsed;
+              const defaultBrokers = [
+                { id: 1, name: "CloudAMQP (Primary)",         server: "kingfisher.lmq.cloudamqp.com",         port: 8883, user: "wxoeelnh", pass: "BQAdo1W8qPeDlnF1O2WZ_AdUTd_uVG0x", clientId: "ESP32AMQP", vhost: "wxoeelnh" },
+                { id: 2, name: "MyQtthub (Backup)",           port: 1883, server: "node02.myqtthub.com",                  user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null },
+                { id: 3, name: "Cedalo Cloud (Fallback)",     port: 8883, server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null }
+              ];
+              const clean = [];
+              for (let i = 0; i < 3; i++) {
+                const item = parsed[i];
+                if (item && typeof item === 'object' && item.server) {
+                  clean.push({ ...defaultBrokers[i], ...item });
+                } else {
+                  clean.push(defaultBrokers[i]);
+                }
+              }
+              loadedBrokers = clean;
             }
           } catch (e) {
             console.error("Failed parsing cached brokers:", e);
@@ -335,7 +381,21 @@ export default function App() {
         try {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            setBrokers(parsed);
+            const defaultBrokers = [
+              { id: 1, name: "CloudAMQP (Primary)",         server: "kingfisher.lmq.cloudamqp.com",         port: 8883, user: "wxoeelnh", pass: "BQAdo1W8qPeDlnF1O2WZ_AdUTd_uVG0x", clientId: "ESP32AMQP", vhost: "wxoeelnh" },
+              { id: 2, name: "MyQtthub (Backup)",           port: 1883, server: "node02.myqtthub.com",                  user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null },
+              { id: 3, name: "Cedalo Cloud (Fallback)",     port: 8883, server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null }
+            ];
+            const clean = [];
+            for (let i = 0; i < 3; i++) {
+              const item = parsed[i];
+              if (item && typeof item === 'object' && item.server) {
+                clean.push({ ...defaultBrokers[i], ...item });
+              } else {
+                clean.push(defaultBrokers[i]);
+              }
+            }
+            setBrokers(clean);
           }
         } catch (err) {}
       } else {
@@ -730,7 +790,14 @@ export default function App() {
       vhost: editVhost || null
     };
 
-    const nextBrokers = [...brokers];
+    const defaultBrokers = [
+      { id: 1, name: "CloudAMQP (Primary)",         server: "kingfisher.lmq.cloudamqp.com",         port: 8883, user: "wxoeelnh", pass: "BQAdo1W8qPeDlnF1O2WZ_AdUTd_uVG0x", clientId: "ESP32AMQP", vhost: "wxoeelnh" },
+      { id: 2, name: "MyQtthub (Backup)",           port: 1883, server: "node02.myqtthub.com",                  user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null },
+      { id: 3, name: "Cedalo Cloud (Fallback)",     port: 8883, server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null }
+    ];
+
+    const currentBrokers = brokers.length > 0 ? brokers : defaultBrokers;
+    const nextBrokers = [...currentBrokers];
     nextBrokers[editingBrokerIdx] = updatedBroker;
 
     // Cache updated broker list persistent in the browser localStorage
