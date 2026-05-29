@@ -211,25 +211,41 @@ export default function App() {
     const pass = broker.pass || "";
     const vhost = broker.vhost || "";
     
-    // Determine WebSocket options depending on known hostnames for browser support
+    // Determine Port & Path dynamically
+    const isHttps = window.location.protocol === "https:";
+    protocol = isHttps ? "wss" : "ws";
+    
+    // Check if the user entered a custom port that looks like a WebSocket port
+    const customPort = parseInt(broker.port);
+    const isCommonWsPort = [80, 443, 8000, 8080, 8083, 8084, 15675, 15676, 31443].includes(customPort);
+
     if (server.includes("cloudamqp.com")) {
-      wsPort = 15676;
-      path = "/ws";
+      // CloudAMQP LavinMQ/RabbitMQ
+      // Standard WSS ports: 15676 (default management-plugin wss) or 443 (HTTPS WebSockets proxy)
+      wsPort = isCommonWsPort ? customPort : 443;
+      path = "/ws"; // LavinMQ expects '/ws' path for websockets
     } else if (server.includes("myqtthub.com")) {
-      wsPort = 443;
-      path = "";
+      // MyQttHub
+      // Standard WSS ports: 443 (HTTPS proxy WSS) or 8084 (Alternative WSS)
+      wsPort = isCommonWsPort ? customPort : 443;
+      path = ""; // MyQttHub handles root wss
     } else if (server.includes("cedalo.cloud")) {
-      wsPort = 443;
+      // Cedalo Cloud
+      // Standard WSS port is 443
+      wsPort = isCommonWsPort ? customPort : 443;
       path = "/mqtt";
     } else {
-      // General defaults
-      const isHttps = window.location.protocol === "https:";
-      protocol = isHttps ? "wss" : "ws";
+      // Other brokers
       wsPort = isHttps ? 443 : 1883;
+      if (isCommonWsPort) {
+        wsPort = customPort;
+      }
       
-      // Keep selected port if it sounds like a WebSocket port
-      if (broker.port === 8000 || broker.port === 8083 || broker.port === 8084 || broker.port === 15676 || broker.port === 31443) {
-        wsPort = broker.port;
+      // Attempt smart paths depending on common ports
+      if (wsPort === 15676 || wsPort === 15675) {
+        path = "/ws";
+      } else if (wsPort === 8083 || wsPort === 8084) {
+        path = "/mqtt";
       }
     }
     
