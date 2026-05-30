@@ -104,21 +104,38 @@ let mqttClient: mqtt.MqttClient | null = null;
 async function publishMqttServerless(brokerIdx: number, topic: string, payload: string): Promise<boolean> {
   const broker = BROKERS[brokerIdx];
   const loginUser = broker.vhost ? `${broker.vhost}:${broker.user}` : broker.user;
-  const useExact = (broker as any).exactClientId || broker.clientId === "hebat-web-client";
+  const useExact = (broker as any).exactClientId || broker.clientId === "hebat-web-client" || broker.clientId === "WebClient" || broker.clientId === "ESP32AMQP";
   const uniqueClientId = useExact ? broker.clientId : `${broker.clientId}_vercel_${Math.random().toString(36).substring(2, 6)}`;
   
-  // Choose secure WebSocket URL for Serverless (Vercel) to bypass raw outbound TCP restrictions on port 8883
+  const customPort = parseInt(broker.port as any) || 1883;
+  const isCommonWsPort = [80, 443, 8000, 8080, 8083, 8084, 15675, 15676, 31443].includes(customPort);
+
   let connectUrl = "";
-  if (broker.server.includes("cloudamqp.com")) {
+  if (isCommonWsPort) {
+    const isSecure = [443, 8084, 15676, 31443].includes(customPort);
+    const wsProto = isSecure ? "wss" : "ws";
+    let path = "";
+    if (broker.server.includes("cloudamqp.com")) {
+      path = "/ws";
+    } else if (broker.server.includes("myqtthub.com")) {
+      path = "/mqtt";
+    } else if (broker.server.includes("cedalo.cloud")) {
+      path = "/mqtt";
+    } else if (customPort === 15675 || customPort === 15676) {
+      path = "/ws";
+    } else if (customPort === 8083 || customPort === 8084) {
+      path = "/mqtt";
+    }
+    connectUrl = `${wsProto}://${broker.server}:${customPort}${path}`;
+  } else if (broker.server.includes("cloudamqp.com")) {
     connectUrl = `wss://${broker.server}:443/ws`;
   } else if (broker.server.includes("myqtthub.com")) {
     connectUrl = `wss://${broker.server}:443/mqtt`;
   } else if (broker.server.includes("cedalo.cloud")) {
     connectUrl = `wss://${broker.server}:443/mqtt`;
   } else {
-    // Fallback to standard mqtts or mqtt
-    const protocol = broker.port === 1883 || broker.port === 1884 ? "mqtt" : "mqtts";
-    connectUrl = `${protocol}://${broker.server}:${broker.port}`;
+    const protocol = customPort === 1883 || customPort === 1884 ? "mqtt" : "mqtts";
+    connectUrl = `${protocol}://${broker.server}:${customPort}`;
   }
 
   return new Promise((resolve) => {
@@ -186,16 +203,41 @@ function connectMQTT(brokerIdx: number) {
   systemState.brokerConnected = false;
   
   const loginUser = broker.vhost ? `${broker.vhost}:${broker.user}` : broker.user;
-  const useExact = (broker as any).exactClientId || broker.clientId === "hebat-web-client";
+  const useExact = (broker as any).exactClientId || broker.clientId === "hebat-web-client" || broker.clientId === "WebClient" || broker.clientId === "ESP32AMQP";
   const uniqueClientId = useExact ? broker.clientId : `${broker.clientId}_web_${Math.random().toString(36).substring(2, 6)}`;
-  const protocol = broker.port === 1883 || broker.port === 1884 ? "mqtt" : "mqtts";
   
-  console.log(`[MQTT] Connecting to Broker #${brokerIdx + 1} (${broker.server}:${broker.port}) as ${uniqueClientId} over ${protocol}...`);
-  addEvent("system", `Koneksi ke Broker ${brokerIdx + 1} (${broker.server}) dimulai...`, "system");
+  const customPort = parseInt(broker.port as any) || 1883;
+  const isCommonWsPort = [80, 443, 8000, 8080, 8083, 8084, 15675, 15676, 31443].includes(customPort);
+
+  let connectUrl = "";
+  if (isCommonWsPort) {
+    const isSecure = [443, 8084, 15676, 31443].includes(customPort);
+    const wsProto = isSecure ? "wss" : "ws";
+    let path = "";
+    if (broker.server.includes("cloudamqp.com")) {
+      path = "/ws";
+    } else if (broker.server.includes("myqtthub.com")) {
+      path = "/mqtt";
+    } else if (broker.server.includes("cedalo.cloud")) {
+      path = "/mqtt";
+    } else if (customPort === 15675 || customPort === 15676) {
+      path = "/ws";
+    } else if (customPort === 8083 || customPort === 8084) {
+      path = "/mqtt";
+    }
+    connectUrl = `${wsProto}://${broker.server}:${customPort}${path}`;
+  } else {
+    const isMqtts = customPort === 8883 || customPort === 8884 || customPort !== 1883;
+    const protocol = isMqtts ? "mqtts" : "mqtt";
+    connectUrl = `${protocol}://${broker.server}:${customPort}`;
+  }
+
+  console.log(`[MQTT] Connecting to Broker #${brokerIdx + 1} (${connectUrl}) as ${uniqueClientId}...`);
+  addEvent("system", `Koneksi ke Broker ${brokerIdx + 1} (${broker.server}:${customPort}) dimulai...`, "system");
   broadcastStateToClients();
 
   try {
-    mqttClient = mqtt.connect(`${protocol}://${broker.server}:${broker.port}`, {
+    mqttClient = mqtt.connect(connectUrl, {
       username: loginUser,
       password: broker.pass,
       clientId: uniqueClientId,
@@ -453,6 +495,38 @@ app.post("/api/update-broker", (req, res) => {
       vhost: b.vhost
     }))
   });
+});
+
+// 2c. Sync all broker configurations from client localStorage (e.g. on start)
+app.post("/api/sync-brokers", (req, res) => {
+  const { brokers } = req.body;
+  if (Array.isArray(brokers) && brokers.length === 3) {
+    brokers.forEach((b: any, idx: number) => {
+      if (b && b.server) {
+        BROKERS[idx] = {
+          server: b.server,
+          port: parseInt(b.port) || 1883,
+          user: b.user || "",
+          pass: b.pass || "",
+          clientId: b.clientId || `ESP32_${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+          vhost: b.vhost || null,
+          exactClientId: b.clientId === "hebat-web-client" || b.clientId === "WebClient" || b.clientId === "ESP32AMQP"
+        } as any;
+      }
+    });
+    console.log("[Sync] Synchronized broker configurations from browser client storage.");
+    
+    // Trigger reconnection if needed to the now-synced configurations of the active broker idx
+    const activeIdx = systemState.activeBrokerIdx;
+    if (activeIdx >= 0 && activeIdx <= 2) {
+      console.log(`[Sync] Re-connecting with newly synced credentials to Broker #${activeIdx + 1}`);
+      connectMQTT(activeIdx);
+    }
+    
+    res.json({ success: true, message: "Status disinkronkan" });
+  } else {
+    res.status(400).json({ error: "Data sync tidak valid." });
+  }
 });
 
 // 3. Publish Control MQTT Topic

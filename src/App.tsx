@@ -315,7 +315,7 @@ export default function App() {
     const loginUser = vhost ? `${vhost}:${user}` : user;
     
     // Generate unique client name to prevent collision
-    const useExact = broker.clientId === "hebat-web-client";
+    const useExact = broker.clientId === "hebat-web-client" || broker.clientId === "WebClient" || broker.clientId === "ESP32AMQP";
     const clientId = useExact ? broker.clientId : `${broker.clientId}_browser_${Math.random().toString(36).substring(2, 6)}`;
     
     let wsUrl = `${protocol}://${server}:${wsPort}`;
@@ -384,6 +384,15 @@ export default function App() {
         }
         
         setBrokers(loadedBrokers);
+
+        // Sync browser client configurations to backend server dynamically
+        try {
+          fetch("/api/sync-brokers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ brokers: loadedBrokers })
+          }).catch(err => console.warn("Failed to sync brokers with backend:", err));
+        } catch (e) {}
         
         setState(prev => ({
           ...prev,
