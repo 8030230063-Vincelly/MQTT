@@ -455,6 +455,18 @@ export default function App() {
   useEffect(() => {
     if (brokers.length === 0) return;
     
+    // Prevent client ID collision/hammering on MyQttHub/Cedalo when backend gateway is active
+    if (connectionStatus === "CONNECTED") {
+      if (clientRef.current) {
+        console.log("[Browser MQTT] Server Gateway is active. Sidestepping redundant browser-side direct MQTT client to prevent Client ID conflict.");
+        try {
+          clientRef.current.end();
+          clientRef.current = null;
+        } catch (e) {}
+      }
+      return;
+    }
+    
     const activeBroker = brokers[state.activeBrokerIdx];
     if (!activeBroker) return;
     
@@ -542,7 +554,7 @@ export default function App() {
         } catch (e) {}
       }
     };
-  }, [state.activeBrokerIdx, brokers]);
+  }, [state.activeBrokerIdx, brokers, connectionStatus]);
 
   // Handle incoming topics received inside browser directly
   const handleIncomingClientMqttMessage = (topic: string, value: string) => {

@@ -226,6 +226,12 @@ function connectMQTT(brokerIdx: number) {
       path = "/mqtt";
     }
     connectUrl = `${wsProto}://${broker.server}:${customPort}${path}`;
+  } else if (broker.server.includes("cloudamqp.com")) {
+    connectUrl = `wss://${broker.server}:443/ws`;
+  } else if (broker.server.includes("myqtthub.com")) {
+    connectUrl = `wss://${broker.server}:443/mqtt`;
+  } else if (broker.server.includes("cedalo.cloud")) {
+    connectUrl = `wss://${broker.server}:443/mqtt`;
   } else {
     const isMqtts = customPort === 8883 || customPort === 8884 || customPort !== 1883;
     const protocol = isMqtts ? "mqtts" : "mqtt";
