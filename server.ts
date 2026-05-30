@@ -29,8 +29,8 @@ const ai = new GoogleGenAI({
 // Broker configurations (matching ESP32 firmware)
 const BROKERS = [
   { server: "kingfisher.lmq.cloudamqp.com",         port: 8883, user: "wxoeelnh", pass: "BQAdo1W8qPeDlnF1O2WZ_AdUTd_uVG0x", clientId: "ESP32AMQP", vhost: "wxoeelnh", exactClientId: false },
-  { server: "node02.myqtthub.com",                  port: 8883, user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null,       exactClientId: false },
-  { server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", port: 8883, user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null,       exactClientId: false }
+  { server: "node02.myqtthub.com",                  port: 8883, user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null,       exactClientId: true },
+  { server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", port: 8883, user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null,       exactClientId: true }
 ];
 
 // App current live in-memory state
@@ -104,7 +104,7 @@ let mqttClient: mqtt.MqttClient | null = null;
 async function publishMqttServerless(brokerIdx: number, topic: string, payload: string): Promise<boolean> {
   const broker = BROKERS[brokerIdx];
   const loginUser = broker.vhost ? `${broker.vhost}:${broker.user}` : broker.user;
-  const useExact = (broker as any).exactClientId || broker.clientId === "hebat-web-client" || broker.clientId === "WebClient" || broker.clientId === "ESP32AMQP";
+  const useExact = !!(broker as any).exactClientId;
   const uniqueClientId = useExact ? broker.clientId : `${broker.clientId}_vercel_${Math.random().toString(36).substring(2, 6)}`;
   
   const customPort = parseInt(broker.port as any) || 1883;
@@ -127,14 +127,9 @@ async function publishMqttServerless(brokerIdx: number, topic: string, payload: 
       path = "/mqtt";
     }
     connectUrl = `${wsProto}://${broker.server}:${customPort}${path}`;
-  } else if (broker.server.includes("cloudamqp.com")) {
-    connectUrl = `wss://${broker.server}:443/ws`;
-  } else if (broker.server.includes("myqtthub.com")) {
-    connectUrl = `wss://${broker.server}:443/mqtt`;
-  } else if (broker.server.includes("cedalo.cloud")) {
-    connectUrl = `wss://${broker.server}:443/mqtt`;
   } else {
-    const protocol = customPort === 1883 || customPort === 1884 ? "mqtt" : "mqtts";
+    const isMqtts = customPort === 8883 || customPort === 8884 || customPort !== 1883;
+    const protocol = isMqtts ? "mqtts" : "mqtt";
     connectUrl = `${protocol}://${broker.server}:${customPort}`;
   }
 
@@ -203,8 +198,8 @@ function connectMQTT(brokerIdx: number) {
   systemState.brokerConnected = false;
   
   const loginUser = broker.vhost ? `${broker.vhost}:${broker.user}` : broker.user;
-  const useExact = (broker as any).exactClientId || broker.clientId === "hebat-web-client" || broker.clientId === "WebClient" || broker.clientId === "ESP32AMQP";
-  const uniqueClientId = useExact ? broker.clientId : `${broker.clientId}_web_${Math.random().toString(36).substring(2, 6)}`;
+  const useExact = !!(broker as any).exactClientId;
+  const uniqueClientId = useExact ? broker.clientId : `${broker.clientId}_srv_${Math.random().toString(36).substring(2, 6)}`;
   
   const customPort = parseInt(broker.port as any) || 1883;
   const isCommonWsPort = [80, 443, 8000, 8080, 8083, 8084, 15675, 15676, 31443].includes(customPort);
@@ -226,12 +221,6 @@ function connectMQTT(brokerIdx: number) {
       path = "/mqtt";
     }
     connectUrl = `${wsProto}://${broker.server}:${customPort}${path}`;
-  } else if (broker.server.includes("cloudamqp.com")) {
-    connectUrl = `wss://${broker.server}:443/ws`;
-  } else if (broker.server.includes("myqtthub.com")) {
-    connectUrl = `wss://${broker.server}:443/mqtt`;
-  } else if (broker.server.includes("cedalo.cloud")) {
-    connectUrl = `wss://${broker.server}:443/mqtt`;
   } else {
     const isMqtts = customPort === 8883 || customPort === 8884 || customPort !== 1883;
     const protocol = isMqtts ? "mqtts" : "mqtt";
@@ -426,7 +415,8 @@ app.get("/api/stream", (req, res) => {
       user: b.user,
       pass: b.pass,
       clientId: b.clientId,
-      vhost: b.vhost
+      vhost: b.vhost,
+      exactClientId: !!(b as any).exactClientId
     }))
   });
   res.write(`data: ${baseline}\n\n`);
@@ -450,14 +440,15 @@ app.get("/api/state", (req, res) => {
       user: b.user,
       pass: b.pass,
       clientId: b.clientId,
-      vhost: b.vhost
+      vhost: b.vhost,
+      exactClientId: !!(b as any).exactClientId
     }))
   });
 });
 
 // 2b. Update broker custom configurations dynamically
 app.post("/api/update-broker", (req, res) => {
-  const { index, server, port, user, pass, clientId, vhost } = req.body;
+  const { index, server, port, user, pass, clientId, vhost, exactClientId } = req.body;
   const idx = parseInt(index);
   if (isNaN(idx) || idx < 0 || idx > 2) {
     res.status(400).json({ error: "Indeks broker tidak valid (0 - 2)." });
@@ -476,7 +467,7 @@ app.post("/api/update-broker", (req, res) => {
     pass: pass || "",
     clientId: clientId || `ESP32_${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
     vhost: vhost || null,
-    exactClientId: clientId === "hebat-web-client" || clientId === "WebClient"
+    exactClientId: exactClientId !== undefined ? !!exactClientId : (clientId === "hebat-web-client" || clientId === "WebClient" || clientId === "ESP32AMQP")
   } as any;
 
   addEvent("broker", `Konfigurasi Broker ${idx + 1} diperbarui ke: ${server}:${port}`, "web");
@@ -498,7 +489,8 @@ app.post("/api/update-broker", (req, res) => {
       user: b.user,
       pass: b.pass,
       clientId: b.clientId,
-      vhost: b.vhost
+      vhost: b.vhost,
+      exactClientId: !!(b as any).exactClientId
     }))
   });
 });
@@ -516,7 +508,7 @@ app.post("/api/sync-brokers", (req, res) => {
           pass: b.pass || "",
           clientId: b.clientId || `ESP32_${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
           vhost: b.vhost || null,
-          exactClientId: b.clientId === "hebat-web-client" || b.clientId === "WebClient" || b.clientId === "ESP32AMQP"
+          exactClientId: b.exactClientId !== undefined ? !!b.exactClientId : (b.clientId === "hebat-web-client" || b.clientId === "WebClient" || b.clientId === "ESP32AMQP")
         } as any;
       }
     });

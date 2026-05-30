@@ -48,9 +48,9 @@ export default function App() {
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [brokers, setBrokers] = useState<any[]>(() => {
     const defaultBrokers = [
-      { id: 1, name: "CloudAMQP (Primary)",         server: "kingfisher.lmq.cloudamqp.com",         port: 8883, user: "wxoeelnh", pass: "BQAdo1W8qPeDlnF1O2WZ_AdUTd_uVG0x", clientId: "ESP32AMQP", vhost: "wxoeelnh" },
-      { id: 2, name: "MyQtthub (Backup)",           port: 8883, server: "node02.myqtthub.com",                  user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null },
-      { id: 3, name: "Cedalo Cloud (Fallback)",     port: 8883, server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null }
+      { id: 1, name: "CloudAMQP (Primary)",         server: "kingfisher.lmq.cloudamqp.com",         port: 8883, user: "wxoeelnh", pass: "BQAdo1W8qPeDlnF1O2WZ_AdUTd_uVG0x", clientId: "ESP32AMQP", vhost: "wxoeelnh", exactClientId: false },
+      { id: 2, name: "MyQtthub (Backup)",           port: 8883, server: "node02.myqtthub.com",                  user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null,       exactClientId: true },
+      { id: 3, name: "Cedalo Cloud (Fallback)",     port: 8883, server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null,       exactClientId: true }
     ];
     const cached = localStorage.getItem("mqtt_brokers");
     if (cached) {
@@ -82,6 +82,7 @@ export default function App() {
   const [editPass, setEditPass] = useState("");
   const [editClientId, setEditClientId] = useState("ESP32AMQP");
   const [editVhost, setEditVhost] = useState("");
+  const [editExactClientId, setEditExactClientId] = useState(false);
 
   // Voice Command & Speech states
   const [isRecording, setIsRecording] = useState(false);
@@ -315,7 +316,7 @@ export default function App() {
     const loginUser = vhost ? `${vhost}:${user}` : user;
     
     // Generate unique client name to prevent collision
-    const useExact = broker.clientId === "hebat-web-client" || broker.clientId === "WebClient" || broker.clientId === "ESP32AMQP";
+    const useExact = broker.exactClientId !== undefined ? !!broker.exactClientId : (broker.clientId === "hebat-web-client" || broker.clientId === "WebClient" || broker.clientId === "ESP32AMQP");
     const clientId = useExact ? broker.clientId : `${broker.clientId}_browser_${Math.random().toString(36).substring(2, 6)}`;
     
     let wsUrl = `${protocol}://${server}:${wsPort}`;
@@ -357,9 +358,9 @@ export default function App() {
             const parsed = JSON.parse(cached);
             if (Array.isArray(parsed) && parsed.length > 0) {
               const defaultBrokers = [
-                { id: 1, name: "CloudAMQP (Primary)",         server: "kingfisher.lmq.cloudamqp.com",         port: 8883, user: "wxoeelnh", pass: "BQAdo1W8qPeDlnF1O2WZ_AdUTd_uVG0x", clientId: "ESP32AMQP", vhost: "wxoeelnh" },
-                { id: 2, name: "MyQtthub (Backup)",           port: 8883, server: "node02.myqtthub.com",                  user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null },
-                { id: 3, name: "Cedalo Cloud (Fallback)",     port: 8883, server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null }
+                { id: 1, name: "CloudAMQP (Primary)",         server: "kingfisher.lmq.cloudamqp.com",         port: 8883, user: "wxoeelnh", pass: "BQAdo1W8qPeDlnF1O2WZ_AdUTd_uVG0x", clientId: "ESP32AMQP", vhost: "wxoeelnh", exactClientId: false },
+                { id: 2, name: "MyQtthub (Backup)",           port: 8883, server: "node02.myqtthub.com",                  user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null,       exactClientId: true },
+                { id: 3, name: "Cedalo Cloud (Fallback)",     port: 8883, server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null,       exactClientId: true }
               ];
               const clean = [];
               for (let i = 0; i < 3; i++) {
@@ -826,7 +827,8 @@ export default function App() {
       user: idx === 0 ? "wxoeelnh" : idx === 1 ? "ESP" : "Web",
       pass: idx === 0 ? "BQAdo1W8qPeDlnF1O2WZ_AdUTd_uVG0x" : "a",
       clientId: idx === 0 ? "ESP32AMQP" : "WebClient",
-      vhost: idx === 0 ? "wxoeelnh" : null
+      vhost: idx === 0 ? "wxoeelnh" : null,
+      exactClientId: idx !== 0
     };
     setEditingBrokerIdx(idx);
     setEditServer(broker.server || "");
@@ -835,6 +837,7 @@ export default function App() {
     setEditPass(broker.pass || "");
     setEditClientId(broker.clientId || "");
     setEditVhost(broker.vhost || "");
+    setEditExactClientId(broker.exactClientId !== undefined ? !!broker.exactClientId : (broker.clientId === "hebat-web-client" || broker.clientId === "WebClient" || broker.clientId === "ESP32AMQP"));
   };
 
   const handleSaveBroker = async (e: React.FormEvent) => {
@@ -848,13 +851,14 @@ export default function App() {
       user: editUser,
       pass: editPass,
       clientId: editClientId,
-      vhost: editVhost || null
+      vhost: editVhost || null,
+      exactClientId: editExactClientId
     };
 
     const defaultBrokers = [
-      { id: 1, name: "CloudAMQP (Primary)",         server: "kingfisher.lmq.cloudamqp.com",         port: 8883, user: "wxoeelnh", pass: "BQAdo1W8qPeDlnF1O2WZ_AdUTd_uVG0x", clientId: "ESP32AMQP", vhost: "wxoeelnh" },
-      { id: 2, name: "MyQtthub (Backup)",           port: 8883, server: "node02.myqtthub.com",                  user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null },
-      { id: 3, name: "Cedalo Cloud (Fallback)",     port: 8883, server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null }
+      { id: 1, name: "CloudAMQP (Primary)",         server: "kingfisher.lmq.cloudamqp.com",         port: 8883, user: "wxoeelnh", pass: "BQAdo1W8qPeDlnF1O2WZ_AdUTd_uVG0x", clientId: "ESP32AMQP", vhost: "wxoeelnh", exactClientId: false },
+      { id: 2, name: "MyQtthub (Backup)",           port: 8883, server: "node02.myqtthub.com",                  user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null,       exactClientId: true },
+      { id: 3, name: "Cedalo Cloud (Fallback)",     port: 8883, server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null,       exactClientId: true }
     ];
 
     const currentBrokers = brokers.length > 0 ? brokers : defaultBrokers;
@@ -879,7 +883,8 @@ export default function App() {
           user: editUser,
           pass: editPass,
           clientId: editClientId,
-          vhost: editVhost || null
+          vhost: editVhost || null,
+          exactClientId: editExactClientId
         })
       });
     } catch (err) {
@@ -1528,6 +1533,20 @@ export default function App() {
                           placeholder="Opsional"
                         />
                       </div>
+                    </div>
+
+                    <div className="flex items-start gap-2 py-1 select-none">
+                      <input
+                        type="checkbox"
+                        id="editExactClientId"
+                        checked={editExactClientId}
+                        onChange={(e) => setEditExactClientId(e.target.checked)}
+                        className="mt-0.5 h-3.5 w-3.5 text-indigo-600 focus:ring-indigo-500 border-slate-300 rounded cursor-pointer"
+                      />
+                      <label htmlFor="editExactClientId" className="text-[10px] text-slate-600 leading-tight cursor-pointer">
+                        <span className="font-semibold text-slate-800 block">Gunakan Client ID Persis (Tanpa Suffix Acak)</span>
+                        Penting untuk MyQttHub atau broker lain yang memverifikasi kecocokan Client ID perangkat.
+                      </label>
                     </div>
 
                     <button
