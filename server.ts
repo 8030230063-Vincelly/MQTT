@@ -104,7 +104,7 @@ let mqttClient: mqtt.MqttClient | null = null;
 async function publishMqttServerless(brokerIdx: number, topic: string, payload: string): Promise<boolean> {
   const broker = BROKERS[brokerIdx];
   const loginUser = broker.vhost ? `${broker.vhost}:${broker.user}` : broker.user;
-  const useExact = (broker as any).exactClientId || broker.clientId === "hebat-web-client" || broker.clientId === "WebClient";
+  const useExact = (broker as any).exactClientId || broker.clientId === "hebat-web-client";
   const uniqueClientId = useExact ? broker.clientId : `${broker.clientId}_vercel_${Math.random().toString(36).substring(2, 6)}`;
   const protocol = broker.port === 1883 || broker.port === 1884 ? "mqtt" : "mqtts";
 
@@ -173,7 +173,7 @@ function connectMQTT(brokerIdx: number) {
   systemState.brokerConnected = false;
   
   const loginUser = broker.vhost ? `${broker.vhost}:${broker.user}` : broker.user;
-  const useExact = (broker as any).exactClientId || broker.clientId === "hebat-web-client" || broker.clientId === "WebClient";
+  const useExact = (broker as any).exactClientId || broker.clientId === "hebat-web-client";
   const uniqueClientId = useExact ? broker.clientId : `${broker.clientId}_web_${Math.random().toString(36).substring(2, 6)}`;
   const protocol = broker.port === 1883 || broker.port === 1884 ? "mqtt" : "mqtts";
   

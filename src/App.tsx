@@ -298,7 +298,7 @@ export default function App() {
     const loginUser = vhost ? `${vhost}:${user}` : user;
     
     // Generate unique client name to prevent collision
-    const useExact = broker.clientId === "hebat-web-client" || broker.clientId === "WebClient";
+    const useExact = broker.clientId === "hebat-web-client";
     const clientId = useExact ? broker.clientId : `${broker.clientId}_browser_${Math.random().toString(36).substring(2, 6)}`;
     
     let wsUrl = `${protocol}://${server}:${wsPort}`;
