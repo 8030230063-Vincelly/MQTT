@@ -29,8 +29,8 @@ const ai = new GoogleGenAI({
 // Broker configurations (matching ESP32 firmware)
 const BROKERS = [
   { server: "kingfisher.lmq.cloudamqp.com",         port: 8883, user: "wxoeelnh", pass: "BQAdo1W8qPeDlnF1O2WZ_AdUTd_uVG0x", clientId: "ESP32AMQP", vhost: "wxoeelnh", exactClientId: false },
-  { server: "node02.myqtthub.com",                  port: 1883, user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null,       exactClientId: true },
-  { server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", port: 8883, user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null,       exactClientId: true }
+  { server: "node02.myqtthub.com",                  port: 8883, user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null,       exactClientId: false },
+  { server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", port: 8883, user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null,       exactClientId: false }
 ];
 
 // App current live in-memory state
@@ -106,11 +106,24 @@ async function publishMqttServerless(brokerIdx: number, topic: string, payload: 
   const loginUser = broker.vhost ? `${broker.vhost}:${broker.user}` : broker.user;
   const useExact = (broker as any).exactClientId || broker.clientId === "hebat-web-client";
   const uniqueClientId = useExact ? broker.clientId : `${broker.clientId}_vercel_${Math.random().toString(36).substring(2, 6)}`;
-  const protocol = broker.port === 1883 || broker.port === 1884 ? "mqtt" : "mqtts";
+  
+  // Choose secure WebSocket URL for Serverless (Vercel) to bypass raw outbound TCP restrictions on port 8883
+  let connectUrl = "";
+  if (broker.server.includes("cloudamqp.com")) {
+    connectUrl = `wss://${broker.server}:443/ws`;
+  } else if (broker.server.includes("myqtthub.com")) {
+    connectUrl = `wss://${broker.server}:443/mqtt`;
+  } else if (broker.server.includes("cedalo.cloud")) {
+    connectUrl = `wss://${broker.server}:443/mqtt`;
+  } else {
+    // Fallback to standard mqtts or mqtt
+    const protocol = broker.port === 1883 || broker.port === 1884 ? "mqtt" : "mqtts";
+    connectUrl = `${protocol}://${broker.server}:${broker.port}`;
+  }
 
   return new Promise((resolve) => {
-    console.log(`[Vercel MQTT] Connecting to publish on ${broker.server}:${broker.port} as ${uniqueClientId} over ${protocol}...`);
-    const client = mqtt.connect(`${protocol}://${broker.server}:${broker.port}`, {
+    console.log(`[Vercel MQTT] Connecting to publish on ${connectUrl} as ${uniqueClientId}...`);
+    const client = mqtt.connect(connectUrl, {
       username: loginUser,
       password: broker.pass,
       clientId: uniqueClientId,
