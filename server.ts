@@ -29,8 +29,8 @@ const ai = new GoogleGenAI({
 // Broker configurations (matching ESP32 firmware)
 const BROKERS = [
   { server: "kingfisher.lmq.cloudamqp.com",         port: 8883, user: "wxoeelnh", pass: "BQAdo1W8qPeDlnF1O2WZ_AdUTd_uVG0x", clientId: "ESP32AMQP", vhost: "wxoeelnh", exactClientId: false },
-  { server: "node02.myqtthub.com",                  port: 1883, user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null,       exactClientId: false },
-  { server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", port: 8883, user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null,       exactClientId: false }
+  { server: "node02.myqtthub.com",                  port: 1883, user: "ESP",    pass: "a",                                 clientId: "WebClient",     vhost: null,       exactClientId: true },
+  { server: "pf-l6rvh5uuefqnek6dwyef.cedalo.cloud", port: 8883, user: "Web",    pass: "a",                                 clientId: "WebClient",    vhost: null,       exactClientId: true }
 ];
 
 // App current live in-memory state
